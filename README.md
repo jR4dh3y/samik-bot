@@ -1,26 +1,14 @@
 # samik-bot
 
-Greptile/CodeRabbit-style PR review bot. Mention `@samik-bot` in a PR comment and it runs a
-reviewer coding agent against the PR diff using a pool of organization-authorized OpenCode Zen or
-OrcaRouter API keys, then posts one summary comment plus inline findings pinned to diff lines. The
-reviewer engine
-is configuration: the default is [OpenCode 2 beta](https://opencode.ai/v2/docs) (`opencode2`), or
-the lightweight, extensible [pi coding agent](https://github.com/earendil-works/pi) (`pi`), which
-keeps using the same Zen credentials. The summary includes a Mermaid sequence diagram and precedes
-the inline findings. A React dashboard handles registration and administrator key management. One
-Go binary serves everything.
+[![Powered by OrcaRouter](https://img.shields.io/badge/Powered_by-OrcaRouter-2563eb)](https://www.orcarouter.ai/ref/ref_b7dd35655fa712a6b8b0)
 
-> **Engine and gateway status.** OpenCode 2 is beta software and its CLI/configuration can change; this
-> service invokes an externally installed `opencode2` binary. pi is a smaller, more stable
-> automation surface (`pi --print`), and both engines address models with the same
-> `provider/model` IDs. Neither binary is bundled with the Go or Bun dependencies.
-> [OpenCode Zen](https://opencode.ai/docs/zen/) is the built-in model gateway for both engines: it carries
-> paid pay-as-you-go models **and** rate-limited free models (IDs ending in `-free`, for example
-> `opencode/big-pickle` or `opencode/glm-5.3-flash`), which pi can use without spend. `orcarouter/…`
-> models route through [OrcaRouter](https://www.orcarouter.ai) instead (see
-> [Routing reviews through OrcaRouter](#routing-reviews-through-orcarouter)). Add only keys
-> your organization is authorized to operate. The pool must not be used to evade provider credits,
-> rate limits, spend limits, or terms of service.
+PR review bot powered by AI coding agents running inside hardened Bubblewrap sandboxes. Mention `@samik-bot` on a pull request and it runs an agentic review against the PR diff, posting a summary comment with a Mermaid sequence diagram followed by inline diff findings.
+
+Preconfigured for [OrcaRouter](https://www.orcarouter.ai) (`orcarouter/auto`) with dual-engine support:
+- [OpenCode 2](https://opencode.ai/v2/docs) (`opencode2`, default)
+- [pi](https://github.com/earendil-works/pi) (`pi`, lightweight Node agent)
+
+> **Engines & Gateways.** Reviews run under Bubblewrap isolation with read-only repository access. Models use `provider/model` identifiers. `orcarouter/…` models route through [OrcaRouter](https://www.orcarouter.ai) (OpenAI-compatible gateway at `https://api.orcarouter.ai/v1`). `opencode/…` models route through OpenCode Zen. Keys are encrypted at rest in SQLite and injected only into the sandboxed agent's isolated credential store.
 
 ## How it works
 
@@ -122,36 +110,32 @@ proves the staged agent
 resolves that gateway provider from the isolated credential store without calling
 a model.
 
-### Routing reviews through OrcaRouter
+### OrcaRouter Preconfiguration
 
-The review model's provider prefix selects the gateway that receives the pooled key. `opencode/…`
-models keep the engines' built-in OpenCode Zen provider; `orcarouter/…` models route through
-[OrcaRouter](https://www.orcarouter.ai) — an OpenAI-compatible gateway at
-`https://api.orcarouter.ai/v1` — and need OrcaRouter keys in the pool. Set the model with
-`ZEN_DEFAULT_MODEL` (for example `orcarouter/auto`) or at `/admin/settings`, then add keys issued
-by that gateway at `/admin/keys`. Keep the pool and the configured model on one gateway: key
-selection is least-used across the whole pool, so a mixed pool hands reviews credentials from the
-wrong provider. Quota detection and `ZEN_COOLDOWN_MINUTES` cooldowns apply to either gateway.
+`samik-bot` is preconfigured for [OrcaRouter](https://www.orcarouter.ai) out of the box (`ZEN_DEFAULT_MODEL=orcarouter/auto`). The provider configuration ships in `orcarouter.toml`:
 
-The gateway is provisioned per run inside the review sandbox; nothing is added to the host
-environment and the key never enters the child environment or the provider block:
+```toml
+model = "orcarouter/auto"
+model_provider = "orcarouter"
 
-- `opencode2` receives a custom `orcarouter` provider in its isolated `opencode.json`
-  (`@ai-sdk/openai-compatible` pointed at `https://api.orcarouter.ai/v1`) and the pooled key in the
-  isolated auth store under that provider ID.
-- pi receives a custom `orcarouter` provider in `models.json` under its isolated
-  `PI_CODING_AGENT_DIR` (`baseUrl` plus the OpenAI-compatible chat-completions API), alongside the
-  same provider-keyed auth-store credential.
+[model_providers.orcarouter]
+name     = "OrcaRouter"
+base_url = "https://api.orcarouter.ai/v1"
+wire_api = "responses"
+env_key  = "ORCA_KEY"
+```
 
-### OrcaRouter partner dashboard
+Both reviewer engines support OrcaRouter seamlessly:
+- **`opencode2`**: Dynamically receives a custom `orcarouter` provider in its sandbox `opencode.json` (`@ai-sdk/openai-compatible` at `https://api.orcarouter.ai/v1`) with the pooled key injected via the isolated auth store.
+- **`pi`**: Dynamically receives a custom `orcarouter` provider in `models.json` under its isolated sandbox directory (`baseUrl: https://api.orcarouter.ai/v1`, using OpenAI-compatible chat completions) alongside its auth store.
 
-`/admin/partner` (administrators) collects the deployment's partner integration in one place: the
-referral link and code, the directory listing entry, and a **Connect with OrcaRouter** flow. The
-connect button mints a PKCE authorization URL at `/orca/connect-url` (the endpoint the official
-drop-in button script expects), sends the operator to OrcaRouter's consent screen with the
-referral code attached, and `/auth/orca/callback` exchanges the returned code server-side — the
-key never passes through the browser — and stores it encrypted in the same gateway pool. Set
-`ORCAROUTER_REFERRAL_CODE` to override the baked-in referral code.
+To route reviews through OrcaRouter, keep the default `ZEN_DEFAULT_MODEL=orcarouter/auto` (or switch model dynamically at `/admin/settings`), and connect or add OrcaRouter API keys.
+
+### OrcaRouter Partner Integration & Connect Flow
+
+The bot integrates with OrcaRouter's partner dashboard at `/admin/partner`:
+- **Referral attribution**: Preconfigured with partner referral code `ref_b7dd35655fa712a6b8b0` (override with `ORCAROUTER_REFERRAL_CODE`). New accounts signing up via your link (`https://www.orcarouter.ai/ref/ref_b7dd35655fa712a6b8b0`) are credited automatically.
+- **Connect with OrcaRouter**: Administrators can click the drop-in **Connect with OrcaRouter** button at `/admin/partner`. The server mints a secure PKCE challenge (`/orca/connect-url`), redirects to consent, and exchanges the authorization code server-side (`/auth/orca/callback`). The API key never touches the browser and is encrypted straight into SQLite.
 
 Build and verify the frontend plus single binary:
 
@@ -235,8 +219,8 @@ commenters get a register-here reply.
 | `ALLOWED_GITHUB_INSTALLATION_IDS` | yes | — | Comma-separated numeric GitHub App installation IDs; each review target must match |
 | `ALLOWED_GITHUB_REPOSITORY_IDS` | yes | — | Comma-separated numeric GitHub repository IDs; each review target must match |
 | `BOT_USERNAME` | no | `samik-bot` | Valid GitHub login without `@`; mention trigger is case-insensitive |
-| `ZEN_DEFAULT_MODEL` | yes | — | Current enabled `provider/model` identifier; initial value, overridable at `/admin/settings`. The provider prefix selects the gateway: `opencode/…` (OpenCode Zen, the default) or `orcarouter/…` (OrcaRouter); the key pool must match that gateway |
-| `ORCAROUTER_REFERRAL_CODE` | no | deployment's code | Partner referral code baked into the OrcaRouter connect URLs minted at `/orca/connect-url` and shown at `/admin/partner` |
+| `ZEN_DEFAULT_MODEL` | yes | `orcarouter/auto` | Current enabled `provider/model` identifier; initial value, overridable at `/admin/settings`. Preconfigured for OrcaRouter (`orcarouter/auto`); `opencode/…` routes to OpenCode Zen |
+| `ORCAROUTER_REFERRAL_CODE` | no | `ref_b7dd35655fa712a6b8b0` | Partner referral code baked into the OrcaRouter connect URLs minted at `/orca/connect-url` and shown at `/admin/partner` |
 | `REVIEW_CONCURRENCY` | no | `2` | Worker pool size; must be at least 1 |
 | `REVIEW_TIMEOUT_MINUTES` | no | `20` | Per-review hard timeout; must be at least 1 |
 | `ZEN_COOLDOWN_MINUTES` | no | `60` | Cooldown after a gateway quota/rate-limit error; must be at least 1 |
